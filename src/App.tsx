@@ -26,13 +26,21 @@ export default function App() {
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to generate video");
+        // Handle error without calling .json() directly to avoid parsing errors
+        // if the response is not valid JSON
+        const text = await response.text();
+        let errorMessage = "Failed to generate video";
+        try {
+          const data = JSON.parse(text);
+          errorMessage = data.error || errorMessage;
+        } catch (e) {
+          errorMessage = text || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const blob = await response.blob();
-      const videoBlob = new Blob([blob], { type: "video/mp4" });
-      const url = window.URL.createObjectURL(videoBlob);
+      const url = window.URL.createObjectURL(blob);
       setVideoUrl(url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
