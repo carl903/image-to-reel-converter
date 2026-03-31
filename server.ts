@@ -37,6 +37,24 @@ try {
 console.log("Using FFmpeg binary path:", ffmpegPath);
 console.log("----------------------------------");
 
+// Process-level event logging for debugging service restarts
+process.on("SIGTERM", () => {
+  console.log("Received SIGTERM signal. Service is shutting down...");
+});
+
+process.on("SIGINT", () => {
+  console.log("Received SIGINT signal. Service is shutting down...");
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err.message);
+  console.error(err.stack);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 8080;
@@ -100,14 +118,14 @@ async function startServer() {
       "-i", inputPath,
       "-r", "25",
       "-vcodec", "libx264",
+      "-preset", "ultrafast",
+      "-tune", "stillimage",
+      "-crf", "32",
+      "-threads", "1",
       "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
       "-pix_fmt", "yuv420p",
       "-movflags", "+faststart",
-      "-profile:v", "high",
-      "-level", "4.0",
-      "-colorspace", "bt709",
-      "-color_trc", "bt709",
-      "-color_primaries", "bt709",
+      "-shortest",
       "-y", // Overwrite output file if it exists
       outputPath
     ];
@@ -116,15 +134,17 @@ async function startServer() {
 
     await new Promise<void>((resolve, reject) => {
       const ffmpegProcess = spawn(ffmpegPath, args);
+      console.log(`FFmpeg process started with PID: ${ffmpegProcess.pid}`);
+
       let stderr = "";
 
       ffmpegProcess.stderr.on("data", (data) => {
         const chunk = data.toString();
         stderr += chunk;
-        // console.log(`FFmpeg stderr chunk: ${chunk}`); // Optional: too noisy?
       });
 
-      ffmpegProcess.on("close", (code) => {
+      ffmpegProcess.on("close", (code, signal) => {
+        console.log(`FFmpeg process closed with code: ${code}, signal: ${signal}`);
         if (code === 0) {
           console.log("FFmpeg process closed with success code 0.");
           // Validate output file
@@ -141,9 +161,9 @@ async function startServer() {
             reject(new Error("Video file was not created on disk"));
           }
         } else {
-          console.error("FFmpeg process exited with code:", code);
+          console.error("FFmpeg process failed.");
           console.error("Full FFmpeg stderr output:\n", stderr);
-          reject(new Error(`FFmpeg process failed with code ${code}. Stderr: ${stderr}`));
+          reject(new Error(`FFmpeg process failed with code ${code} and signal ${signal}. Stderr: ${stderr}`));
         }
       });
 
