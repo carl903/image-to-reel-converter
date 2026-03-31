@@ -5,29 +5,10 @@ import fs from "fs";
 import axios from "axios";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import { createRequire } from "module";
 import { spawn } from "child_process";
 
-const require = createRequire(import.meta.url);
-const ffmpegPath = require("ffmpeg-static");
-
-// Verify FFmpeg path
-if (ffmpegPath) {
-  console.log("FFmpeg binary path resolved to:", ffmpegPath);
-  if (fs.existsSync(ffmpegPath)) {
-    console.log("FFmpeg binary exists at path.");
-    try {
-      fs.chmodSync(ffmpegPath, 0o755);
-      console.log("FFmpeg permissions set to 755.");
-    } catch (err) {
-      console.error("Failed to set FFmpeg permissions:", err);
-    }
-  } else {
-    console.error("FFmpeg binary DOES NOT exist at the resolved path!");
-  }
-} else {
-  console.error("FFmpeg path could not be resolved by ffmpeg-static!");
-}
+const ffmpegPath = "ffmpeg";
+console.log("Using system ffmpeg binary:", ffmpegPath);
 
 async function startServer() {
   const app = express();
@@ -50,8 +31,8 @@ async function startServer() {
 
   // Shared video generation function
   async function generateVideo(imageUrl: string, inputPath: string, outputPath: string) {
-    if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
-      throw new Error(`FFmpeg binary not found at ${ffmpegPath || "unknown path"}`);
+    if (!ffmpegPath) {
+      throw new Error("FFmpeg binary path is not set");
     }
 
     // Download image
@@ -69,7 +50,7 @@ async function startServer() {
       writer.on("error", reject);
     });
 
-    // Convert image to 5s video using spawn with the static binary path
+    // Convert image to 5s video using spawn with the system binary
     console.log("Starting FFmpeg conversion via spawn...");
     console.log("Using FFmpeg binary:", ffmpegPath);
 
