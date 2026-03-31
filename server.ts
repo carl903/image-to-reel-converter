@@ -5,10 +5,37 @@ import fs from "fs";
 import axios from "axios";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 
-const ffmpegPath = "ffmpeg";
-console.log("Using system ffmpeg binary:", ffmpegPath);
+let ffmpegPath = "ffmpeg";
+
+// Startup diagnostics
+console.log("--- FFmpeg Startup Diagnostics ---");
+try {
+  const whichFfmpeg = execSync("which ffmpeg").toString().trim();
+  console.log("FFmpeg found at (which ffmpeg):", whichFfmpeg);
+  ffmpegPath = whichFfmpeg;
+} catch (e) {
+  console.error("FFmpeg NOT found in PATH via 'which ffmpeg'");
+  // Try common absolute paths as fallback
+  const commonPaths = ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) {
+      console.log(`FFmpeg found at absolute path: ${p}`);
+      ffmpegPath = p;
+      break;
+    }
+  }
+}
+
+try {
+  const version = execSync(`${ffmpegPath} -version`).toString().split("\n")[0];
+  console.log("FFmpeg version check successful:", version);
+} catch (e: any) {
+  console.error("FFmpeg version check failed:", e.message);
+}
+console.log("Using FFmpeg binary path:", ffmpegPath);
+console.log("----------------------------------");
 
 async function startServer() {
   const app = express();
@@ -22,6 +49,7 @@ async function startServer() {
   const outputsDir = path.join(process.cwd(), "outputs");
   [tempDir, outputsDir].forEach(dir => {
     if (!fs.existsSync(dir)) {
+      console.log(`Creating directory: ${dir}`);
       fs.mkdirSync(dir, { recursive: true });
     }
   });
@@ -35,20 +63,32 @@ async function startServer() {
       throw new Error("FFmpeg binary path is not set");
     }
 
+    console.log(`Downloading image from: ${imageUrl}`);
     // Download image
-    const response = await axios({
-      url: imageUrl,
-      method: "GET",
-      responseType: "stream",
-    });
+    try {
+      const response = await axios({
+        url: imageUrl,
+        method: "GET",
+        responseType: "stream",
+      });
 
-    const writer = fs.createWriteStream(inputPath);
-    response.data.pipe(writer);
+      const writer = fs.createWriteStream(inputPath);
+      response.data.pipe(writer);
 
-    await new Promise<void>((resolve, reject) => {
-      writer.on("finish", () => resolve());
-      writer.on("error", reject);
-    });
+      await new Promise<void>((resolve, reject) => {
+        writer.on("finish", () => {
+          console.log(`Image downloaded successfully to: ${inputPath}`);
+          resolve();
+        });
+        writer.on("error", (err) => {
+          console.error(`Error writing image to disk: ${err.message}`);
+          reject(err);
+        });
+      });
+    } catch (err: any) {
+      console.error(`Failed to download image: ${err.message}`);
+      throw new Error(`Failed to download image: ${err.message}`);
+    }
 
     // Convert image to 5s video using spawn with the system binary
     console.log("Starting FFmpeg conversion via spawn...");
@@ -72,19 +112,25 @@ async function startServer() {
       outputPath
     ];
 
+    console.log(`FFmpeg args: ${args.join(" ")}`);
+
     await new Promise<void>((resolve, reject) => {
       const ffmpegProcess = spawn(ffmpegPath, args);
       let stderr = "";
 
       ffmpegProcess.stderr.on("data", (data) => {
-        stderr += data.toString();
+        const chunk = data.toString();
+        stderr += chunk;
+        // console.log(`FFmpeg stderr chunk: ${chunk}`); // Optional: too noisy?
       });
 
       ffmpegProcess.on("close", (code) => {
         if (code === 0) {
+          console.log("FFmpeg process closed with success code 0.");
           // Validate output file
           if (fs.existsSync(outputPath)) {
             const stats = fs.statSync(outputPath);
+            console.log(`Output file created at: ${outputPath}, size: ${stats.size} bytes`);
             if (stats.size > 0) {
               console.log("FFmpeg conversion successful.");
               resolve();
@@ -92,18 +138,18 @@ async function startServer() {
               reject(new Error("Generated video file is empty"));
             }
           } else {
-            reject(new Error("Video file was not created"));
+            reject(new Error("Video file was not created on disk"));
           }
         } else {
           console.error("FFmpeg process exited with code:", code);
-          console.error("FFmpeg stderr:", stderr);
-          reject(new Error(`FFmpeg process failed with code ${code}: ${stderr}`));
+          console.error("Full FFmpeg stderr output:\n", stderr);
+          reject(new Error(`FFmpeg process failed with code ${code}. Stderr: ${stderr}`));
         }
       });
 
       ffmpegProcess.on("error", (err) => {
-        console.error("Failed to start FFmpeg process:", err);
-        reject(err);
+        console.error("Failed to start FFmpeg process:", err.message);
+        reject(new Error(`Failed to start FFmpeg process: ${err.message}`));
       });
     });
   }
@@ -142,11 +188,11 @@ async function startServer() {
 
       // Cleanup input file
       if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    } catch (error) {
-      console.error("Webhook conversion error:", error);
+    } catch (error: any) {
+      console.error("Webhook conversion error:", error.message);
       res.status(500).json({ 
         success: false, 
-        error: error instanceof Error ? error.message : "Failed to convert image to video" 
+        error: error.message || "Failed to convert image to video" 
       });
 
       // Cleanup on failure
@@ -183,9 +229,9 @@ async function startServer() {
           console.error("Cleanup error:", cleanupErr);
         }
       });
-    } catch (error) {
-      console.error("Manual conversion error:", error);
-      res.status(500).json({ error: "Failed to convert image to video" });
+    } catch (error: any) {
+      console.error("Manual conversion error:", error.message);
+      res.status(500).json({ error: error.message || "Failed to convert image to video" });
 
       // Cleanup on failure
       try {
