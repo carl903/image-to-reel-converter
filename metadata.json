@@ -1,0 +1,5 @@
+{
+  "name": "Image to Reel Converter",
+  "description": "Convert any static image URL into a 5-second vertical MP4 video (1080x1920) ready for Reels or TikTok.",
+  "requestFramePermissions": []
+}
