@@ -3,26 +3,30 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
 import axios from "axios";
-import ffmpeg from "fluent-ffmpeg";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { createRequire } from "module";
+import { spawn } from "child_process";
 
 const require = createRequire(import.meta.url);
 const ffmpegPath = require("ffmpeg-static");
 
-// Set ffmpeg path from ffmpeg-static
+// Verify FFmpeg path
 if (ffmpegPath) {
-  console.log("FFmpeg found at:", ffmpegPath);
-  try {
-    fs.chmodSync(ffmpegPath, 0o755);
-    console.log("FFmpeg permissions set to 755.");
-  } catch (err) {
-    console.error("Failed to set FFmpeg permissions:", err);
+  console.log("FFmpeg binary path resolved to:", ffmpegPath);
+  if (fs.existsSync(ffmpegPath)) {
+    console.log("FFmpeg binary exists at path.");
+    try {
+      fs.chmodSync(ffmpegPath, 0o755);
+      console.log("FFmpeg permissions set to 755.");
+    } catch (err) {
+      console.error("Failed to set FFmpeg permissions:", err);
+    }
+  } else {
+    console.error("FFmpeg binary DOES NOT exist at the resolved path!");
   }
-  ffmpeg.setFfmpegPath(ffmpegPath);
 } else {
-  console.error("FFmpeg path not found from ffmpeg-static!");
+  console.error("FFmpeg path could not be resolved by ffmpeg-static!");
 }
 
 async function startServer() {
@@ -46,6 +50,10 @@ async function startServer() {
 
   // Shared video generation function
   async function generateVideo(imageUrl: string, inputPath: string, outputPath: string) {
+    if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
+      throw new Error(`FFmpeg binary not found at ${ffmpegPath || "unknown path"}`);
+    }
+
     // Download image
     const response = await axios({
       url: imageUrl,
@@ -61,39 +69,43 @@ async function startServer() {
       writer.on("error", reject);
     });
 
-    // Convert image to 5s video
-    console.log("Starting FFmpeg conversion...");
-    if (ffmpegPath) {
-      ffmpeg.setFfmpegPath(ffmpegPath);
-    }
+    // Convert image to 5s video using spawn with the static binary path
+    console.log("Starting FFmpeg conversion via spawn...");
+    console.log("Using FFmpeg binary:", ffmpegPath);
+
+    const args = [
+      "-loop", "1",
+      "-t", "5",
+      "-i", inputPath,
+      "-r", "25",
+      "-vcodec", "libx264",
+      "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
+      "-profile:v", "high",
+      "-level", "4.0",
+      "-colorspace", "bt709",
+      "-color_trc", "bt709",
+      "-color_primaries", "bt709",
+      "-y", // Overwrite output file if it exists
+      outputPath
+    ];
+
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(inputPath)
-        .inputOptions(["-loop 1"])
-        .duration(5)
-        .fps(25)
-        .videoCodec("libx264")
-        .videoFilters([
-          "scale=1080:1920:force_original_aspect_ratio=decrease",
-          "pad=1080:1920:(ow-iw)/2:(oh-ih)/2",
-          "format=yuv420p"
-        ])
-        .outputOptions([
-          "-pix_fmt yuv420p",
-          "-movflags +faststart",
-          "-profile:v high",
-          "-level 4.0",
-          "-colorspace bt709",
-          "-color_trc bt709",
-          "-color_primaries bt709"
-        ])
-        .on("start", (commandLine) => {
-          console.log("Spawned FFmpeg with command: " + commandLine);
-        })
-        .on("end", () => {
+      const ffmpegProcess = spawn(ffmpegPath, args);
+      let stderr = "";
+
+      ffmpegProcess.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      ffmpegProcess.on("close", (code) => {
+        if (code === 0) {
           // Validate output file
           if (fs.existsSync(outputPath)) {
             const stats = fs.statSync(outputPath);
             if (stats.size > 0) {
+              console.log("FFmpeg conversion successful.");
               resolve();
             } else {
               reject(new Error("Generated video file is empty"));
@@ -101,13 +113,17 @@ async function startServer() {
           } else {
             reject(new Error("Video file was not created"));
           }
-        })
-        .on("error", (err, stdout, stderr) => {
-          console.error("FFmpeg error:", err);
+        } else {
+          console.error("FFmpeg process exited with code:", code);
           console.error("FFmpeg stderr:", stderr);
-          reject(err);
-        })
-        .save(outputPath);
+          reject(new Error(`FFmpeg process failed with code ${code}: ${stderr}`));
+        }
+      });
+
+      ffmpegProcess.on("error", (err) => {
+        console.error("Failed to start FFmpeg process:", err);
+        reject(err);
+      });
     });
   }
 
