@@ -4,13 +4,25 @@ import path from "path";
 import fs from "fs";
 import axios from "axios";
 import ffmpeg from "fluent-ffmpeg";
-import ffmpegPath from "ffmpeg-static";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const ffmpegPath = require("ffmpeg-static");
 
 // Set ffmpeg path from ffmpeg-static
 if (ffmpegPath) {
+  console.log("FFmpeg found at:", ffmpegPath);
+  try {
+    fs.chmodSync(ffmpegPath, 0o755);
+    console.log("FFmpeg permissions set to 755.");
+  } catch (err) {
+    console.error("Failed to set FFmpeg permissions:", err);
+  }
   ffmpeg.setFfmpegPath(ffmpegPath);
+} else {
+  console.error("FFmpeg path not found from ffmpeg-static!");
 }
 
 async function startServer() {
@@ -50,6 +62,10 @@ async function startServer() {
     });
 
     // Convert image to 5s video
+    console.log("Starting FFmpeg conversion...");
+    if (ffmpegPath) {
+      ffmpeg.setFfmpegPath(ffmpegPath);
+    }
     await new Promise<void>((resolve, reject) => {
       ffmpeg(inputPath)
         .inputOptions(["-loop 1"])
