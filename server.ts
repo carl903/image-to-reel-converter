@@ -75,6 +75,12 @@ async function startServer() {
   // Serve outputs directory statically
   app.use("/outputs", express.static(outputsDir));
 
+  // robots.txt route for Meta/Facebook crawler access
+  app.get("/robots.txt", (req, res) => {
+    res.type("text/plain");
+    res.send("User-agent: *\nAllow: /");
+  });
+
   // Shared video generation function
   async function generateVideo(imageUrl: string, inputPath: string, outputPath: string) {
     if (!ffmpegPath) {
