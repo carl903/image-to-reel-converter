@@ -26,8 +26,6 @@ export default function App() {
       });
 
       if (!response.ok) {
-        // Handle error without calling .json() directly to avoid parsing errors
-        // if the response is not valid JSON
         const text = await response.text();
         let errorMessage = "Failed to generate video";
         try {
@@ -39,9 +37,8 @@ export default function App() {
         throw new Error(errorMessage);
       }
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      setVideoUrl(url);
+      const data = await response.json();
+      setVideoUrl(data.video_url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {

@@ -75,6 +75,11 @@ async function startServer() {
   // Serve outputs directory statically
   app.use("/outputs", express.static(outputsDir));
 
+  // Ensure requests to /outputs/ that don't match a file return 404, not the SPA index.html
+  app.get("/outputs/*", (req, res) => {
+    res.status(404).send("Video not found or has been cleaned up.");
+  });
+
   // robots.txt route for Meta/Facebook crawler access
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain");
@@ -207,6 +212,7 @@ async function startServer() {
       res.json({
         success: true,
         video_url: videoUrl,
+        filename: outputFilename,
         duration: 5,
         width: 1080,
         height: 1920
@@ -239,22 +245,25 @@ async function startServer() {
 
     const id = uuidv4();
     const inputPath = path.join(tempDir, `${id}_input.jpg`);
-    const outputPath = path.join(tempDir, `${id}_output.mp4`);
+    const outputFilename = `${id}_reel.mp4`;
+    const outputPath = path.join(outputsDir, outputFilename);
 
     try {
       await generateVideo(imageUrl, inputPath, outputPath);
 
-      // Send the file with explicit MIME type
-      res.setHeader("Content-Type", "video/mp4");
-      res.download(outputPath, "reel.mp4", (err) => {
-        // Cleanup files after download
-        try {
-          if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        } catch (cleanupErr) {
-          console.error("Cleanup error:", cleanupErr);
-        }
+      // Construct public URL dynamically
+      const protocol = req.headers["x-forwarded-proto"] || req.protocol;
+      const host = req.get("host");
+      const videoUrl = `${protocol}://${host}/outputs/${outputFilename}`;
+
+      res.json({
+        success: true,
+        video_url: videoUrl,
+        filename: outputFilename
       });
+
+      // Cleanup input file immediately
+      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
     } catch (error: any) {
       console.error("Manual conversion error:", error.message);
       res.status(500).json({ error: error.message || "Failed to convert image to video" });
