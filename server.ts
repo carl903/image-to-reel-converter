@@ -6,6 +6,10 @@ import axios from "axios";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { spawn, execSync } from "child_process";
+import { Storage } from "@google-cloud/storage";
+
+const storage = new Storage();
+const BUCKET_NAME = "ukbb-reels-temp-storage-2026";
 
 let ffmpegPath = "ffmpeg";
 
@@ -36,6 +40,31 @@ try {
 }
 console.log("Using FFmpeg binary path:", ffmpegPath);
 console.log("----------------------------------");
+
+// Helper to upload to GCS and get signed URL
+async function uploadToGCS(localFilePath: string, destinationName: string) {
+  try {
+    const bucket = storage.bucket(BUCKET_NAME);
+    await bucket.upload(localFilePath, {
+      destination: destinationName,
+      metadata: {
+        contentType: "video/mp4",
+      },
+    });
+
+    const file = bucket.file(destinationName);
+    const [signedUrl] = await file.getSignedUrl({
+      version: "v4",
+      action: "read",
+      expires: Date.now() + 2 * 60 * 60 * 1000, // 2 hours
+    });
+
+    return signedUrl;
+  } catch (error: any) {
+    console.error("GCS Upload Error:", error.message);
+    throw new Error(`Failed to upload to GCS: ${error.message}`);
+  }
+}
 
 // Process-level event logging for debugging service restarts
 process.on("SIGTERM", () => {
@@ -204,10 +233,8 @@ async function startServer() {
     try {
       await generateVideo(image_url, inputPath, outputPath);
 
-      // Construct public URL dynamically based on the request host
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-      const host = req.get("host");
-      const videoUrl = `${protocol}://${host}/outputs/${outputFilename}`;
+      // Upload to GCS and get signed URL
+      const videoUrl = await uploadToGCS(outputPath, outputFilename);
 
       res.json({
         success: true,
@@ -218,8 +245,10 @@ async function startServer() {
         height: 1920
       });
 
-      // Cleanup input file
+      // Cleanup local files
       if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      // We keep the local output file for the local /outputs/ route if needed, 
+      // but the user asked for GCS signed URL in the response.
     } catch (error: any) {
       console.error("Webhook conversion error:", error.message);
       res.status(500).json({ 
@@ -251,10 +280,8 @@ async function startServer() {
     try {
       await generateVideo(imageUrl, inputPath, outputPath);
 
-      // Construct public URL dynamically
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-      const host = req.get("host");
-      const videoUrl = `${protocol}://${host}/outputs/${outputFilename}`;
+      // Upload to GCS and get signed URL
+      const videoUrl = await uploadToGCS(outputPath, outputFilename);
 
       res.json({
         success: true,
@@ -262,7 +289,7 @@ async function startServer() {
         filename: outputFilename
       });
 
-      // Cleanup input file immediately
+      // Cleanup local files
       if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
     } catch (error: any) {
       console.error("Manual conversion error:", error.message);
